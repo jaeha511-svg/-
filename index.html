@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>3D 방 꾸미기 (디벗 터치 지원)</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      touch-action: none; /* 태블릿 터치 스크롤 방지 */
+      user-select: none;
+    }
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Noto Sans KR', sans-serif;
+    }
+    #canvas-container {
+      width: 100%;
+      height: 100%;
+      background: #f0f0f0;
+    }
+    /* 상단 메뉴바 */
+    #ui-panel {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      right: 15px;
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(5px);
+      border-radius: 12px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      z-index: 10;
+    }
+    .btn {
+      padding: 10px 16px;
+      border: none;
+      background: #4A90E2;
+      color: white;
+      font-size: 14px;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .btn:active {
+      background: #357ABD;
+    }
+    .btn-danger {
+      background: #E74C3C;
+    }
+    .btn-danger:active {
+      background: #C0392B;
+    }
+    /* 안내 문구 */
+    #guide-text {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      pointer-events: none;
+      z-index: 10;
+    }
+  </style>
+  <!-- Three.js 및 컨트롤 라이브러리 CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+  <div id="ui-panel">
+    <button class="btn" onclick="addFurniture('bed')">🛏️ 침대 추가</button>
+    <button class="btn" onclick="addFurniture('desk')">🖥️ 책상 추가</button>
+    <button class="btn" onclick="addFurniture('chair')">🪑 의자 추가</button>
+    <button class="btn" onclick="addFurniture('closet')">🚪 옷장 추가</button>
+    <button class="btn" onclick="rotateSelected()">🔄 회전 (90°)</button>
+    <button class="btn btn-danger" onclick="deleteSelected()">🗑️ 삭제</button>
+  </div>
+
+  <div id="guide-text">💡 터치 드래그: 가구 이동 / 두 손가락: 화면 회전 및 확대</div>
+  <div id="canvas-container"></div>
+
+  <script>
+    // 1. Scene, Camera, Renderer 설정
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf5f5f7);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 8, 10);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    // 2. 조명 설정
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // 3. OrbitControls (화면 회전/줌/이동) - 터치 지원
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.maxPolarAngle = Math.PI / 2 - 0.05; // 바닥 아래로 카메라 이동 방지
+
+    // 4. 바닥 및 벽면 생성 (방 모양)
+    const roomGroup = new THREE.Group();
+    
+    // 바닥 (Grid)
+    const grid = new THREE.GridHelper(10, 10, 0x888888, 0xcccccc);
+    grid.position.y = 0.01;
+    roomGroup.add(grid);
+
+    const floorGeo = new THREE.PlaneGeometry(10, 10);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0xe0e0e0 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    roomGroup.add(floor);
+
+    // 뒷벽 & 왼쪽 벽
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const wallBack = new THREE.Mesh(new THREE.PlaneGeometry(10, 4), wallMat);
+    wallBack.position.set(0, 2, -5);
+    roomGroup.add(wallBack);
+
+    const wallLeft = new THREE.Mesh(new THREE.PlaneGeometry(10, 4), wallMat);
+    wallLeft.position.set(-5, 2, 0);
+    wallLeft.rotation.y = Math.PI / 2;
+    roomGroup.add(wallLeft);
+
+    scene.add(roomGroup);
+
+    // 5. 가구 생성 로직 (샘플 가구 블록)
+    const furnitureList = [];
+    let selectedObject = null;
+
+    function createMaterial(color) {
+      return new THREE.MeshStandardMaterial({ color: color, roughness: 0.4 });
+    }
+
+    function addFurniture(type) {
+      let mesh;
+      if (type === 'bed') {
+        const group = new THREE.Group();
+        const base = new THREE.Mesh(new THREE.BoxGeometry(2, 0.4, 3), createMaterial(0x8B5A2B));
+        base.position.y = 0.2;
+        const pillow = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.2, 0.6), createMaterial(0xffffff));
+        pillow.position.set(0, 0.5, -1);
+        group.add(base, pillow);
+        mesh = group;
+      } else if (type === 'desk') {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.2, 1.2), createMaterial(0xCD853F));
+        mesh.position.y = 0.6;
+      } else if (type === 'chair') {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1, 0.8), createMaterial(0x4682B4));
+        mesh.position.y = 0.5;
+      } else if (type === 'closet') {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 3, 1.2), createMaterial(0x2F4F4F));
+        mesh.position.y = 1.5;
+      }
+
+      mesh.position.x = (Math.random() - 0.5) * 4;
+      mesh.position.z = (Math.random() - 0.5) * 4;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+
+      scene.add(mesh);
+      furnitureList.push(mesh);
+      selectObject(mesh);
+    }
+
+    // 6. 가구 선택 & 레이캐스팅 (터치 및 마우스)
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // XZ 평면 (바닥)
+    const planeIntersect = new THREE.Vector3();
+    let isDragging = false;
+
+    function getPointerPos(e) {
+      const x = e.touches ? e.touches[0].clientX : e.clientX;
+      const y = e.touches ? e.touches[0].clientY : e.clientY;
+      return {
+        x: (x / window.innerWidth) * 2 - 1,
+        y: -(y / window.innerHeight) * 2 + 1
+      };
+    }
+
+    function onPointerDown(e) {
+      // 두 손가락 이상 터치 시 카메라 조작 모드로 전환 (가구 이동 취소)
+      if (e.touches && e.touches.length > 1) {
+        isDragging = false;
+        controls.enabled = true;
+        return;
+      }
+
+      const pos = getPointerPos(e);
+      mouse.x = pos.x;
+      mouse.y = pos.y;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(furnitureList, true);
+
+      if (intersects.length > 0) {
+        // 선택한 가구의 최상위 Group/Mesh 찾기
+        let obj = intersects[0].object;
+        while (obj.parent && obj.parent !== scene) {
+          obj = obj.parent;
+        }
+        selectObject(obj);
+        isDragging = true;
+        controls.enabled = false; // 가구 드래그 시 카메라 컨트롤 중단
+      } else {
+        deselectObject();
+      }
+    }
+
+    function onPointerMove(e) {
+      if (!isDragging || !selectedObject) return;
+      if (e.touches && e.touches.length > 1) return;
+
+      const pos = getPointerPos(e);
+      mouse.x = pos.x;
+      mouse.y = pos.y;
+
+      raycaster.setFromCamera(mouse, camera);
+      if (raycaster.ray.intersectPlane(plane, planeIntersect)) {
+        // 방 내부 경계 처리 (-4.5 ~ 4.5)
+        selectedObject.position.x = Math.max(-4, Math.min(4, planeIntersect.x));
+        selectedObject.position.z = Math.max(-4, Math.min(4, planeIntersect.z));
+      }
+    }
+
+    function onPointerUp() {
+      isDragging = false;
+      controls.enabled = true; // 카메라 컨트롤 재활성화
+    }
+
+    // 터치 및 마우스 이벤트 등록
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', onPointerUp);
+
+    window.addEventListener('touchstart', onPointerDown, { passive: false });
+    window.addEventListener('touchmove', onPointerMove, { passive: false });
+    window.addEventListener('touchend', onPointerUp);
+
+    // 7. 가구 선택 강조 효과 및 선택 해제
+    function selectObject(obj) {
+      deselectObject();
+      selectedObject = obj;
+      // 가구 외곽선 또는 색상 강조
+      selectedObject.traverse((child) => {
+        if (child.isMesh) {
+          child.userData.oldColor = child.material.color.getHex();
+          child.material.color.setHex(0xFFD700); // 선택 시 금색으로 변경
+        }
+      });
+    }
+
+    function deselectObject() {
+      if (selectedObject) {
+        selectedObject.traverse((child) => {
+          if (child.isMesh && child.userData.oldColor !== undefined) {
+            child.material.color.setHex(child.userData.oldColor);
+          }
+        });
+        selectedObject = null;
+      }
+    }
+
+    function rotateSelected() {
+      if (selectedObject) {
+        selectedObject.rotation.y += Math.PI / 2;
+      }
+    }
+
+    function deleteSelected() {
+      if (selectedObject) {
+        scene.remove(selectedObject);
+        const index = furnitureList.indexOf(selectedObject);
+        if (index > -1) furnitureList.splice(index, 1);
+        selectedObject = null;
+      }
+    }
+
+    // 화면 크기 조절 대응
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // 애니메이션 루프
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
