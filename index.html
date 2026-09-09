@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>3D 방 꾸미기 (PC 마우스 & 태블릿 터치 모두 지원)</title>
+  <title>3D 방 꾸미기 (10cm 스냅 & 높낮이 조절)</title>
   <style>
     * {
       box-sizing: border-box;
-      touch-action: none; /* 스크롤 방지 */
+      touch-action: none;
       user-select: none;
     }
     body, html {
@@ -49,8 +49,8 @@
       color: #333;
     }
     .input-group input {
-      width: 65px;
-      padding: 6px 8px;
+      width: 60px;
+      padding: 6px 6px;
       border: 1px solid #ccc;
       border-radius: 6px;
       font-size: 13px;
@@ -58,10 +58,10 @@
       touch-action: auto;
     }
     .input-group input[type="text"] {
-      width: 90px;
+      width: 80px;
     }
     .btn {
-      padding: 8px 14px;
+      padding: 8px 12px;
       border: none;
       background: #4A90E2;
       color: white;
@@ -116,12 +116,15 @@
     <div class="input-group">
       높이: <input type="number" id="f-height" placeholder="cm" value="75">cm
     </div>
+    <div class="input-group" style="color: #27ae60;">
+      높낮이: <input type="number" id="f-elevation" placeholder="cm" value="0">cm
+    </div>
     <button class="btn" onclick="addCustomFurniture()">➕ 가구 추가</button>
     <button class="btn" onclick="rotateSelected()">🔄 90° 회전</button>
     <button class="btn btn-danger" onclick="deleteSelected()">🗑️ 삭제</button>
   </div>
 
-  <div id="status-bar">💡 가구를 클릭/터치하여 이동하세요. (빈 공간 드래그: 화면 회전)</div>
+  <div id="status-bar">💡 가구는 10cm 단위로 움직입니다. (높낮이 설정으로 선반/전등 배치 가능)</div>
   <div id="canvas-container"></div>
 
   <script>
@@ -153,11 +156,11 @@
     controls.maxPolarAngle = Math.PI / 2 - 0.05;
 
     // 4. 3m x 3m 방 공간 생성
-    const ROOM_SIZE = 3.0; 
+    const ROOM_SIZE = 3.0; // 300cm
     const roomGroup = new THREE.Group();
 
-    // 바닥 그리드
-    const grid = new THREE.GridHelper(ROOM_SIZE, 10, 0x888888, 0xdddddd);
+    // 바닥 그리드 (10cm = 0.1m 단위 격자 30개)
+    const grid = new THREE.GridHelper(ROOM_SIZE, 30, 0x888888, 0xe0e0e0);
     grid.position.y = 0.001;
     roomGroup.add(grid);
 
@@ -218,10 +221,12 @@
       const wCm = parseFloat(document.getElementById('f-width').value) || 100;
       const dCm = parseFloat(document.getElementById('f-depth').value) || 50;
       const hCm = parseFloat(document.getElementById('f-height').value) || 75;
+      const elevCm = parseFloat(document.getElementById('f-elevation').value) || 0; // 높낮이(바닥으로부터 떨어진 거리)
 
       const w = wCm / 100;
       const d = dCm / 100;
       const h = hCm / 100;
+      const elev = elevCm / 100;
 
       const group = new THREE.Group();
 
@@ -233,12 +238,13 @@
       colorIndex++;
 
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.y = h / 2;
+      // 높낮이(elev) + 가구 자체 높이의 절반(h/2) 위치에 중심 배치
+      mesh.position.y = elev + (h / 2);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       group.add(mesh);
 
-      // 이름 라벨
+      // 이름 라벨 (가구 상단 표기)
       const canvas = document.createElement('canvas');
       canvas.width = 256;
       canvas.height = 128;
@@ -249,23 +255,30 @@
       ctx.strokeStyle = '#333333';
       ctx.strokeRect(0, 0, 256, 128);
       ctx.fillStyle = '#000000';
-      ctx.font = 'Bold 28px Noto Sans KR, sans-serif';
+      ctx.font = 'Bold 26px Noto Sans KR, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(name, 128, 50);
-      ctx.font = '20px Noto Sans KR, sans-serif';
-      ctx.fillText(`${wCm}x${dCm}x${hCm}cm`, 128, 90);
+      ctx.fillText(name, 128, 45);
+      ctx.font = '18px Noto Sans KR, sans-serif';
+      ctx.fillText(`${wCm}x${dCm}x${hCm}cm`, 128, 80);
+      if (elevCm > 0) {
+        ctx.fillStyle = '#27ae60';
+        ctx.fillText(`(높낮이: ${elevCm}cm)`, 128, 110);
+      }
 
       const texture = new THREE.CanvasTexture(canvas);
       const labelMat = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
       const labelGeo = new THREE.PlaneGeometry(Math.min(w, 1.2), Math.min(w, 1.2) * 0.5);
       const label = new THREE.Mesh(labelGeo, labelMat);
-      label.position.set(0, h + 0.01, 0);
+      label.position.set(0, elev + h + 0.01, 0);
       label.rotation.x = -Math.PI / 2;
       group.add(label);
 
+      // 가구 정보 및 충돌용 크기 데이터 저장
       group.userData = { 
         name: name,
         mesh: mesh,
+        width: w,
+        depth: d,
         originalColor: material.color.getHex()
       };
 
@@ -276,24 +289,21 @@
       selectObject(group);
     }
 
-    // 7. PC 마우스 & 태블릿 터치 하이브리드 이벤트 처리
+    // 7. 레이캐스팅 및 10cm 스냅 이동/경계 제한
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const planeIntersect = new THREE.Vector3();
     let isDragging = false;
 
-    // 좌표 계산 함수
     function updateMousePos(clientX, clientY) {
       mouse.x = (clientX / window.innerWidth) * 2 - 1;
       mouse.y = -(clientY / window.innerHeight) * 2 + 1;
     }
 
-    // 다운 (클릭 / 터치 시작)
     function onPointerDown(e) {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
 
-      // 멀티터치는 시점 회전(OrbitControls)에 양보
       if (e.touches && e.touches.length > 1) {
         isDragging = false;
         controls.enabled = true;
@@ -314,14 +324,13 @@
         }
         selectObject(obj);
         isDragging = true;
-        controls.enabled = false; // 가구 잡았을 때 화면 회전 멈춤
+        controls.enabled = false;
       } else {
         deselectObject();
-        controls.enabled = true; // 빈 공간 누르면 화면 회전 가능
+        controls.enabled = true;
       }
     }
 
-    // 이동 (마우스 드래그 / 터치 이동)
     function onPointerMove(e) {
       if (!isDragging || !selectedObject) return;
       if (e.touches && e.touches.length > 1) return;
@@ -332,35 +341,47 @@
 
       raycaster.setFromCamera(mouse, camera);
       if (raycaster.ray.intersectPlane(plane, planeIntersect)) {
-        const bound = ROOM_SIZE / 2 - 0.1;
-        selectedObject.position.x = Math.max(-bound, Math.min(bound, planeIntersect.x));
-        selectedObject.position.z = Math.max(-bound, Math.min(bound, planeIntersect.z));
+        
+        // 1. 10cm (0.1m) 단위 스냅 계산
+        let targetX = Math.round(planeIntersect.x * 10) / 10;
+        let targetZ = Math.round(planeIntersect.z * 10) / 10;
+
+        // 2. 가구 회전 여부에 따른 실제 가로/세로 폭 계산
+        const isRotated = Math.round(selectedObject.rotation.y / (Math.PI / 2)) % 2 !== 0;
+        const currentW = isRotated ? selectedObject.userData.depth : selectedObject.userData.width;
+        const currentD = isRotated ? selectedObject.userData.width : selectedObject.userData.depth;
+
+        // 3. 방 밖으로 나가지 못하도록 엄격한 경계 제한 (Boundary Limits)
+        const minX = -ROOM_SIZE / 2 + currentW / 2;
+        const maxX = ROOM_SIZE / 2 - currentW / 2;
+        const minZ = -ROOM_SIZE / 2 + currentD / 2;
+        const maxZ = ROOM_SIZE / 2 - currentD / 2;
+
+        selectedObject.position.x = Math.max(minX, Math.min(maxX, targetX));
+        selectedObject.position.z = Math.max(minZ, Math.min(maxZ, targetZ));
       }
     }
 
-    // 업 (클릭 뗌 / 터치 끝)
     function onPointerUp() {
       isDragging = false;
-      controls.enabled = true; // 드래그 끝나면 화면 회전 재활성화
+      controls.enabled = true;
     }
 
-    // 마우스 이벤트 등록 (PC)
     window.addEventListener('mousedown', onPointerDown);
     window.addEventListener('mousemove', onPointerMove);
     window.addEventListener('mouseup', onPointerUp);
 
-    // 터치 이벤트 등록 (태블릿/모바일)
     window.addEventListener('touchstart', onPointerDown, { passive: false });
     window.addEventListener('touchmove', onPointerMove, { passive: false });
     window.addEventListener('touchend', onPointerUp);
 
-    // 8. 선택, 회전, 삭제 함수
+    // 8. 선택, 회전, 삭제
     function selectObject(obj) {
       deselectObject();
       selectedObject = obj;
       if (selectedObject && selectedObject.userData.mesh) {
         selectedObject.userData.mesh.material.color.setHex(0xFFD700);
-        document.getElementById('status-bar').innerText = `선택됨: [${selectedObject.userData.name}] - 마우스/손가락으로 드래그하여 이동하세요.`;
+        document.getElementById('status-bar').innerText = `선택됨: [${selectedObject.userData.name}] - 10cm 격자 단위로 이동합니다.`;
       }
     }
 
@@ -368,13 +389,16 @@
       if (selectedObject && selectedObject.userData.mesh) {
         selectedObject.userData.mesh.material.color.setHex(selectedObject.userData.originalColor);
         selectedObject = null;
-        document.getElementById('status-bar').innerText = '💡 가구를 클릭/터치하여 이동하세요. (빈 공간 드래그: 화면 회전)';
+        document.getElementById('status-bar').innerText = '💡 가구는 10cm 단위로 움직입니다. (높낮이 설정으로 선반/전등 배치 가능)';
       }
     }
 
     function rotateSelected() {
       if (selectedObject) {
         selectedObject.rotation.y += Math.PI / 2;
+        // 회전 후 벽 밖으로 나가지 않도록 즉시 위치 재조정
+        const event = new MouseEvent('mousemove');
+        onPointerMove(event);
       } else {
         alert('회전할 가구를 먼저 선택해 주세요.');
       }
@@ -406,14 +430,12 @@
       }
     }
 
-    // 창 크기 변경 대응
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // 애니메이션 루프
     function animate() {
       requestAnimationFrame(animate);
       controls.update();
@@ -421,7 +443,6 @@
     }
     animate();
 
-    // 초기 샘플 가구 생성
     addCustomFurniture();
   </script>
 </body>
